@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+//structure for keeping the data that apears in the generated file
 typedef struct Report{
     char districtID[40];
     int reportID;
@@ -54,6 +55,10 @@ int functionDet(char *func){
     }
 }
 
+void add(char *name){
+
+}
+
 int main(int argc, char *argv[]){
     if(argc == 1){
         printf("No arguments were delivered in command line1\n");
@@ -86,14 +91,29 @@ int main(int argc, char *argv[]){
 
     indexArgc+=2;
 
+    int functionHandler = 0;
+
     if(indexArgc < argc){
-        if(functionDet(argv[indexArgc]) > 6 || functionDet(argv[indexArgc]) < 1){
+        if((functionHandler = functionDet(argv[indexArgc])) > 6 || functionDet(argv[indexArgc]) < 1){
             printf("The function couldn't be parsed!\n");
             exit(-1);
         }
     } else{
         printf("Don't have arguments for user\n");
         exit(-1);
+    }
+
+    indexArgc+=1;
+
+    //calling the function that is transmited in command line
+    switch(functionHandler){
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 5:
+        case 6:
+        default:
     }
     return 0;
 }
