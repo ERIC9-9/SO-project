@@ -3,11 +3,13 @@
 #include <time.h>
 #include <stdbool.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 //structure for keeping the data that apears in the generated file
 typedef struct Report{
     char districtID[40];
-    int reportID;
+    int reportID;/
     char name[40];
     float lat,lng;
     char category[40];
@@ -27,10 +29,10 @@ bool parseRole(bool *role, char *func, char *value){
 }
 
 //parsing --user
-bool parseUser(char *user, char *func, char *value){
+bool parseUser(Report *r, char *func, char *value){
     if(strcmp(func,"--user") != 0) return false;
 
-    strcpy(user,value);
+    strcpy(r->name,value);
 
     return true;
 }
@@ -54,10 +56,57 @@ int functionDet(char *func){
             return 7;
     }
 }
+//add new report or append to an existing one (if name matches an existing directory)
+void add(Report *rep,char *name){
+    printf("Latitudine: ");
+    if(scanf("%f",rep->lat) != 1){
+        printf("Nu s-a citit latitudinea corect\n");
+        exit(-1);
+    }
+    printf("Longitudine: ");
+    if(scanf("%f",rep->lng) != 1){
+        printf("Nu s-a citit longitudinea corect\n");
+        exit(-1);
+    }
+    printf("Categorie (road/lighting/flooding/other): ");
+    if(fgets(rep->cat,40,stdin) == NULL){
+        printf("Nu s-a citit categoria corect\n");
+        exit(-1);
+    }
+    printf("Nivel de severitate(1/2/3): ");
+    if(scanf("%d",rep->severity) != 1){
+        printf("Nu s-a citit nivelul de securitate corect\n");
+        exit(-1);
+    }
+    printf("Descriere: ");
+    if(fgets(rep->text,100,stdin) == NULL){
+        printf("Nu s-a citit descrierea corect\n");
+        exit(-1);
+    }
+    strcpy(rep->districtID,name);
+    rep->timestamp = time(NULL);
 
-void add(char *name){
+    struct stat s;// man 3type stat, man 2 stat,s.st_mode
+    if(stat(name,&s) == -1){
+        printf("eroare verificare permisiuni\n");
+        exit(-1);
+    }
+    if(mkdir(name) == -1){
+        printf("eroare creeare director\n");
+        exit(-1);
+    }
 
 }
+
+void list(){}
+
+void view(){}
+
+void remove_report(){}
+
+void update_threshold(){}
+
+void filter(){}
 
 int main(int argc, char *argv[]){
     if(argc == 1){
@@ -80,7 +129,7 @@ int main(int argc, char *argv[]){
 
     indexArgc+=2;
     if(indexArgc+1 < argc){
-        if(!parseUser(current.name,argv[indexArgc],argv[indexArgc+1])){
+        if(!parseUser(&current,argv[indexArgc],argv[indexArgc+1])){
             printf("The user couldn't be parsed!\n");
             exit(-1);
         }
@@ -93,7 +142,7 @@ int main(int argc, char *argv[]){
 
     int functionHandler = 0;
 
-    if(indexArgc < argc){
+    if(indexArgc+1 < argc){
         if((functionHandler = functionDet(argv[indexArgc])) > 6 || functionDet(argv[indexArgc]) < 1){
             printf("The function couldn't be parsed!\n");
             exit(-1);
@@ -108,12 +157,31 @@ int main(int argc, char *argv[]){
     //calling the function that is transmited in command line
     switch(functionHandler){
         case 1:
+            //trebuie verificat inainte role ca sa vedem daca se poate da add (vezi permisiuni)
+            if(role == false){
+                printf("Nu exista permisiune de add\n");
+                break;
+            }
+            add(&current,argv[indexArgc]);
+            break;
         case 2:
+            list();
+            break;
         case 3:
+            view();
+            break;
         case 4:
+            remove_report();
+            break;
         case 5:
+            update_threshold();
+            break;
         case 6:
+            filter();
+            break;
         default:
+            printf("Nu ar trebui sa ajunga aici\n");
+            exit(-1);
     }
     return 0;
 }
