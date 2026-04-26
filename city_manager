@@ -5,11 +5,14 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <errno.h>
 
 //structure for keeping the data that apears in the generated file
 typedef struct Report{
     char districtID[40];
-    int reportID;/
+    int reportID;
     char name[40];
     float lat,lng;
     char category[40];
@@ -39,79 +42,523 @@ bool parseUser(Report *r, char *func, char *value){
 
 //determining the function that is called
 int functionDet(char *func){
-    switch (func){
-        case "--add":
-            return 1;
-        case "--list":
-            return 2;
-        case "--view":
-            return 3;
-        case "--remove_report":
-            return 4;
-        case "--update_threshold":
-            return 5;
-        case "--filter":
-            return 6;
-        default :
-            return 7;
+    if (strcmp(func, "--add") == 0) {
+        return 1;
+    } else if (strcmp(func, "--list") == 0) {
+        return 2;
+    } else if (strcmp(func, "--view") == 0) {
+        return 3;
+    } else if (strcmp(func, "--remove_report") == 0) {
+        return 4;
+    } else if (strcmp(func, "--update_threshold") == 0) {
+        return 5;
+    } else if (strcmp(func, "--filter") == 0) {
+        return 6;
+    } else {
+        return 7; //unknown function
     }
 }
 //add new report or append to an existing one (if name matches an existing directory)
-void add(Report *rep,char *name){
-    printf("Latitudine: ");
-    if(scanf("%f",rep->lat) != 1){
-        printf("Nu s-a citit latitudinea corect\n");
-        exit(-1);
+void add(Report *rep,char *name, bool role){
+    printf("Latitude: ");
+    if(scanf("%f",&rep->lat) != 1){
+        printf("Latitude failed to read\n");
+        exit(EXIT_FAILURE);
     }
-    printf("Longitudine: ");
-    if(scanf("%f",rep->lng) != 1){
-        printf("Nu s-a citit longitudinea corect\n");
-        exit(-1);
+    while(getchar() != '\n'); // Clears the newline character
+    printf("Longitude: ");
+    if(scanf("%f",&rep->lng) != 1){
+        printf("Longitude failed to read\n");
+        exit(EXIT_FAILURE);
     }
-    printf("Categorie (road/lighting/flooding/other): ");
-    if(fgets(rep->cat,40,stdin) == NULL){
-        printf("Nu s-a citit categoria corect\n");
-        exit(-1);
+    while(getchar() != '\n'); // Clears the newline character
+    printf("Category (road/lighting/flooding/other): ");
+    if(fgets(rep->category,40,stdin) == NULL){
+        printf("Category failed to read\n");
+        exit(EXIT_FAILURE);
     }
-    printf("Nivel de severitate(1/2/3): ");
-    if(scanf("%d",rep->severity) != 1){
-        printf("Nu s-a citit nivelul de securitate corect\n");
-        exit(-1);
+    rep->category[strcspn(rep->category, "\n")] = 0;//gets rid of the '\n'
+    printf("Severity level (1-minor/2-moderate/3-critical): ");
+    if(scanf("%d",&rep->severity) != 1){
+        printf("Severity failed to read\n");
+        exit(EXIT_FAILURE);
     }
-    printf("Descriere: ");
+    while(getchar() != '\n'); // Clears the newline character
+    printf("Description: ");
     if(fgets(rep->text,100,stdin) == NULL){
-        printf("Nu s-a citit descrierea corect\n");
-        exit(-1);
+        printf("Description failed to read\n");
+        exit(EXIT_FAILURE);
     }
+    rep->text[strcspn(rep->text, "\n")] = 0;//gets rid of the '\n'
     strcpy(rep->districtID,name);
     rep->timestamp = time(NULL);
 
-    struct stat s;// man 3type stat, man 2 stat,s.st_mode
-    if(stat(name,&s) == -1){
-        printf("eroare verificare permisiuni\n");
-        exit(-1);
+    //reseting mask so permissions are given correctly
+    umask(0);
+
+    //create directory
+    if (mkdir(name, 0750) == -1 && errno != EEXIST) {
+        perror("Error creating directory\n");
+        exit(EXIT_FAILURE);
     }
-    if(mkdir(name) == -1){
-        printf("eroare creeare director\n");
-        exit(-1);
+
+    // Explicitly set directory permissions (in case it already existed)
+    if(chmod(name, 0750) == -1){
+        perror("Error giving permission for directory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //change directory
+    if (chdir(name) != 0) {
+        perror("Error entering directory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //creating the files
+    //create reports.dat
+    int fd_rep = open("reports.dat", O_CREAT | O_RDWR | O_APPEND, 0664);
+    if (fd_rep == -1) {
+        perror("Failed to open/create reports.dat\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //explicitly enforce permissions just in case it already existed
+    fchmod(fd_rep, 0664); //fchmod works directly on the file descriptor
+
+    //find the current size of the file using lseek
+    off_t fileSize = lseek(fd_rep, 0, SEEK_END);
+    rep->reportID = fileSize / sizeof(Report);
+
+    //write the structure to the file
+    if (write(fd_rep, rep, sizeof(Report)) != sizeof(Report)) {
+        perror("Error writing report to file\n");
+        close(fd_rep);
+        exit(EXIT_FAILURE);
+    }
+
+    close(fd_rep);
+
+    //create district.cfg
+    int fd_cfg = open("district.cfg", O_CREAT | O_WRONLY | O_EXCL, 0640);
+
+    if (fd_cfg != -1) {
+        //file was just created
+        char default_cfg[] = "2\n";
+        if (write(fd_cfg, default_cfg, strlen(default_cfg)) == -1) {
+            perror("Error writing default threshold to district.cfg\n");
+            exit(EXIT_FAILURE);
+        }
+        close(fd_cfg);
+        fchmod(fd_cfg, 0640); //force permissions
+    } else if (errno != EEXIST) {
+        //if it failed for any reason other than "it already exists", crash
+        perror("Failed to open district.cfg\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //create logged_district
+    int fd_log = open("logged_district", O_CREAT | O_WRONLY | O_APPEND, 0644);
+
+    if (fd_log == -1) {
+        perror("Failed to open logged_district\n");
+        exit(EXIT_FAILURE);
+    }
+
+    char log_buffer[256];
+
+    //determine role
+    const char *role_str = role ? "manager" : "inspector";
+
+    //format the string
+    int log_len = snprintf(log_buffer, sizeof(log_buffer), "%ld\t%s\t%s\tadd\n",
+                           (long)rep->timestamp, rep->name, role_str);
+
+    if (write(fd_log, log_buffer, log_len) != log_len) {
+        perror("Failed to write to logged_district\n");
+        close(fd_log);
+        exit(EXIT_FAILURE);
+    }
+
+    close(fd_log);
+
+    chmod("logged_district", 0644);
+
+    //print this if everything went accordingly
+    printf("Structure created and permissions applied inside '%s'.\n", name);
+
+    //move back the directory
+    if (chdir("..") != 0) {
+        perror("Error returning to original directory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //create symbolic link
+    char target_path[256];
+    char link_name[256];
+
+    //the target is the file inside the folder: "district_name/reports.dat"
+    snprintf(target_path, sizeof(target_path), "%s/reports.dat", name);
+
+    //the link name in the root folder: "active_reports-district_name"
+    snprintf(link_name, sizeof(link_name), "active_reports-%s", name);
+
+    //create the symlink. If it fails with EEXIST, the link already exists, which is fine.
+    if (symlink(target_path, link_name) == -1 && errno != EEXIST) {
+        perror("Error creating symlink\n");
+        exit(EXIT_FAILURE);
     }
 
 }
 
-void list(){}
+//helper to convert mode bits to a 9-character string
+void mode_to_string(mode_t mode, char *str) {
+    strcpy(str, "---------"); // Default to all dashes
 
-void view(){}
+    // Owner permissions
+    if (mode & S_IRUSR) str[0] = 'r';
+    if (mode & S_IWUSR) str[1] = 'w';
+    if (mode & S_IXUSR) str[2] = 'x';
 
-void remove_report(){}
+    // Group permissions
+    if (mode & S_IRGRP) str[3] = 'r';
+    if (mode & S_IWGRP) str[4] = 'w';
+    if (mode & S_IXGRP) str[5] = 'x';
 
-void update_threshold(){}
+    // Others permissions
+    if (mode & S_IROTH) str[6] = 'r';
+    if (mode & S_IWOTH) str[7] = 'w';
+    if (mode & S_IXOTH) str[8] = 'x';
+}
 
-void filter(){}
+void list(char *district_id) {
+    char path[256];
+    struct stat file_stat;
+    Report rep;
+
+    //build the path to the reports.dat file
+    snprintf(path, sizeof(path), "%s/reports.dat", district_id);
+
+    //get file metadata using stat()
+    if (stat(path, &file_stat) == -1) {
+        perror("Error getting file stats (district might not exist)\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //convert and print the metadata (Permissions, Size, Time)
+    char perm_str[10];
+    mode_to_string(file_stat.st_mode, perm_str);
+
+    //ctime converts the timestamp into a readable string (it includes a newline at the end)
+    printf("File Info: %s | Size: %ld bytes | Last Modified: %s",
+           perm_str, (long)file_stat.st_size, ctime(&file_stat.st_mtime));
+    printf("---------------------------------------------------\n");
+
+    //open the file for reading
+    int fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        perror("Failed to open reports.dat for reading\n");
+        return;
+    }
+
+    //read the structs one by one using a while loop
+    //read() returns the number of bytes read. If it equals sizeof(Report), we got a full record
+    int count = 0;
+    while (read(fd, &rep, sizeof(Report)) == sizeof(Report)) {
+        count++;
+        printf("Report ID : %d\n", rep.reportID);
+        printf("Inspector : %s\n", rep.name);
+        printf("Category  : %s\n", rep.category);
+        printf("Severity  : %d\n", rep.severity);
+        printf("Location  : %.4f, %.4f\n", rep.lat, rep.lng);
+        printf("Details   : %s\n", rep.text);
+        printf("---------------------------------------------------\n");
+    }
+
+    if (count == 0) {
+        printf("No reports found in this district.\n");
+    }
+
+    close(fd);
+}
+
+void view(char *district_id, char *report_id_str) {
+    char path[256];
+    Report rep;
+
+    int target_id = atoi(report_id_str);
+
+    //build the path to the district's report file
+    snprintf(path, sizeof(path), "%s/reports.dat", district_id);
+
+    int fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        perror("Failed to open reports.dat (district might not exist)\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //calculate the exact byte offset for this report ID
+    off_t offset = target_id * sizeof(Report);
+
+    //fast-forward the file cursor to that exact byte offset from the beginning
+    if (lseek(fd, offset, SEEK_SET) == -1) {
+        perror("Error seeking to the requested report\n");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+
+    //try to read exactly one Report struct from that new cursor position
+    if (read(fd, &rep, sizeof(Report)) == sizeof(Report)) {
+        if (rep.reportID == target_id) {
+            printf("=== Report Details (ID: %d) ===\n", rep.reportID);
+            printf("Inspector : %s\n", rep.name);
+            printf("Location  : %.6f, %.6f\n", rep.lat, rep.lng);
+            printf("Category  : %s\n", rep.category);
+            printf("Severity  : %d\n", rep.severity);
+            printf("Time      : %s", ctime(&rep.timestamp)); //ctime adds its own newline
+            printf("Details   : %s\n", rep.text);
+            printf("===============================\n");
+        } else {
+            printf("Error: Data corrupted or ID mismatch at position %d.\n", target_id);
+            close(fd);
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        //if read() returns fewer bytes than sizeof(Report), it means we hit the end of the file
+        printf("Report ID %d does not exist in district '%s'.\n", target_id, district_id);
+    }
+
+    close(fd);
+}
+
+void remove_report(char *district_id, char *report_id_str, char *user_name) {
+    char path[256];
+    Report temp;
+    struct stat st;
+
+    int target_id = atoi(report_id_str);
+
+    snprintf(path, sizeof(path), "%s/reports.dat", district_id);
+
+    //open the file for BOTH reading and writing
+    int fd = open(path, O_RDWR);
+    if (fd == -1) {
+        perror("Failed to open reports.dat\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //get the current file size to know how many records exist
+    if (fstat(fd, &st) == -1) {
+        perror("Failed to stat reports.dat\n");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+
+    off_t file_size = st.st_size;
+    int total_records = file_size / sizeof(Report);
+
+    //check if the requested ID is valid
+    if (target_id < 0 || target_id >= total_records) {
+        printf("Error: Report ID %d does not exist.\n", target_id);
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+
+    //shift all subsequent records one position to the left
+    for (int i = target_id + 1; i < total_records; i++) {
+        //jump to the record we want to copy
+        lseek(fd, i * sizeof(Report), SEEK_SET);
+        read(fd, &temp, sizeof(Report));
+
+        //update the internal ID so it matches its new physical position
+        temp.reportID = i - 1;
+
+        //jump backwards to the position we want to overwrite
+        lseek(fd, (i - 1) * sizeof(Report), SEEK_SET);
+        write(fd, &temp, sizeof(Report));
+    }
+
+    //truncate the file to chop off the duplicate last record
+    off_t new_size = file_size - sizeof(Report);
+    if (ftruncate(fd, new_size) == -1) {
+        perror("Error truncating file\n");
+        exit(EXIT_FAILURE);
+    } else {
+        printf("Report %d successfully removed. File truncated to %ld bytes.\n", target_id, (long)new_size);
+    }
+
+    close(fd);
+
+    //log the operation
+    snprintf(path, sizeof(path), "%s/logged_district", district_id);
+    int fd_log = open(path, O_WRONLY | O_APPEND);
+    if (fd_log != -1) {
+        char log_buffer[256];
+        int log_len = snprintf(log_buffer, sizeof(log_buffer), "%ld\t%s\tmanager\tremove_report %d\n", (long)time(NULL), user_name, target_id);
+        write(fd_log, log_buffer, log_len);
+        close(fd_log);
+    }
+}
+
+void update_threshold(char *district_id, char *new_value_str, char *user_name) {
+    char path[256];
+    struct stat st;
+
+    //build the path to the configuration file
+    snprintf(path, sizeof(path), "%s/district.cfg", district_id);
+
+    //call stat() to get the file's metadata
+    if (stat(path, &st) == -1) {
+        perror("Failed to stat district.cfg\n");
+        return;
+    }
+
+    //check the permission bits
+    //mask the mode with 0777 (which is S_IRWXU | S_IRWXG | S_IRWXO) to ignore file-type bits.
+    //expect 0640: Owner (rw-), Group (r--), Others (---)
+    mode_t expected_perms = S_IRUSR | S_IWUSR | S_IRGRP;
+    mode_t actual_perms = st.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO);
+
+    if (actual_perms != expected_perms) {
+        printf("Diagnostic Error: Refusing to update. Permissions for district.cfg have been altered! Expected 0640.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //open the file to OVERWRITE (O_TRUNC)
+    int fd = open(path, O_WRONLY | O_TRUNC);
+    if (fd == -1) {
+        perror("Failed to open district.cfg for writing\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //write the new threshold string
+    char buffer[32];
+    int len = snprintf(buffer, sizeof(buffer), "%s\n", new_value_str);
+
+    if (write(fd, buffer, len) != len) {
+        perror("Failed to write new threshold\n");
+        close(fd);
+        exit(EXIT_FAILURE);
+    } else {
+        printf("Threshold updated to %s successfully.\n", new_value_str);
+    }
+    close(fd);
+
+    snprintf(path, sizeof(path), "%s/logged_district", district_id);
+    int fd_log = open(path, O_WRONLY | O_APPEND);
+    if (fd_log != -1) {
+        char log_buffer[256];
+        int log_len = snprintf(log_buffer, sizeof(log_buffer), "%ld\t%s\tmanager\tupdate_threshold %s\n", (long)time(NULL), user_name, new_value_str);
+        write(fd_log, log_buffer, log_len);
+        close(fd_log);
+    }
+}
+
+//Splits a field:operator:value string into its three parts
+int parse_condition(const char *input, char *field, char *op, char *value) {
+
+    if (sscanf(input, "%[^:]:%[^:]:%s", field, op, value) == 3) {
+        return 1; //Successfully parsed all 3 parts
+    }
+    return 0; //Failed to parse
+}
+
+//Returns 1 if the record satisfies the condition, 0 otherwise
+int match_condition(Report *r, const char *field, const char *op, const char *value) {
+
+    //--- SEVERITY (Integer Comparison) ---
+    if (strcmp(field, "severity") == 0) {
+        int val = atoi(value); //Convert string to integer
+
+        if (strcmp(op, "==") == 0) return r->severity == val;
+        if (strcmp(op, "!=") == 0) return r->severity != val;
+        if (strcmp(op, "<") == 0)  return r->severity < val;
+        if (strcmp(op, "<=") == 0) return r->severity <= val;
+        if (strcmp(op, ">") == 0)  return r->severity > val;
+        if (strcmp(op, ">=") == 0) return r->severity >= val;
+    }
+
+    //--- TIMESTAMP (Time_t Comparison) ---
+    else if (strcmp(field, "timestamp") == 0) {
+        time_t val = (time_t)atol(value); //Convert string to long integer
+
+        if (strcmp(op, "==") == 0) return r->timestamp == val;
+        if (strcmp(op, "!=") == 0) return r->timestamp != val;
+        if (strcmp(op, "<") == 0)  return r->timestamp < val;
+        if (strcmp(op, "<=") == 0) return r->timestamp <= val;
+        if (strcmp(op, ">") == 0)  return r->timestamp > val;
+        if (strcmp(op, ">=") == 0) return r->timestamp >= val;
+    }
+
+    //--- CATEGORY & INSPECTOR (String Comparison) ---
+    else if (strcmp(field, "category") == 0 || strcmp(field, "inspector") == 0) {
+        //Determine which string from the struct we are checking
+        const char *struct_str = (strcmp(field, "category") == 0) ? r->category : r->name;
+
+        //For strings, usually only == and != make sense
+        if (strcmp(op, "==") == 0) return strcmp(struct_str, value) == 0;
+        if (strcmp(op, "!=") == 0) return strcmp(struct_str, value) != 0;
+    }
+
+    return 0; //If field or operator is unsupported, return false
+}
+
+void filter(char *district_id, int num_conditions, char **conditions_array) {
+    char path[256];
+    Report rep;
+
+    snprintf(path, sizeof(path), "%s/reports.dat", district_id);
+    int fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        perror("Failed to open reports.dat\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //buffers to hold the parsed parts of each condition
+    char field[50], op[5], value[50];
+    int match_count = 0;
+
+    printf("=== Filter Results ===\n");
+
+    //read through the file record by record
+    while (read(fd, &rep, sizeof(Report)) == sizeof(Report)) {
+        int passes_all = 1; //assume the report is valid until a condition fails it
+
+        //test the current report against EVERY condition
+        for (int i = 0; i < num_conditions; i++) {
+            if (parse_condition(conditions_array[i], field, op, value)) {
+
+                //if the report fails even ONE condition, flag it and break the inner loop
+                if (match_condition(&rep, field, op, value) == 0) {
+                    passes_all = 0;
+                    break;
+                }
+
+            } else {
+                printf("Error: Invalid condition format -> %s\n", conditions_array[i]);
+                passes_all = 0;
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        //if passes_all is still 1, it means the report survived all tests
+        if (passes_all) {
+            match_count++;
+            printf("ID: %d | Inspector: %s | Severity: %d | Category: %s\n", rep.reportID, rep.name, rep.severity, rep.category);
+        }
+    }
+
+    if (match_count == 0) {
+        printf("No reports matched the criteria.\n");
+    }
+    printf("======================\n");
+
+    close(fd);
+}
 
 int main(int argc, char *argv[]){
     if(argc == 1){
-        printf("No arguments were delivered in command line1\n");
-        exit(-1);
+        printf("No arguments were delivered in command line\n");
+        exit(EXIT_FAILURE);
     }
 
     int indexArgc = 1;
@@ -120,22 +567,22 @@ int main(int argc, char *argv[]){
     if(indexArgc+1 < argc){
         if(!parseRole(&role,argv[indexArgc],argv[indexArgc+1])){
             printf("The role couldn't be parsed!\n");
-            exit(-1);
+            exit(EXIT_FAILURE);
         }
     } else{
         printf("Don't have arguments for role\n");
-        exit(-1);
+        exit(EXIT_FAILURE);
     }
 
     indexArgc+=2;
     if(indexArgc+1 < argc){
         if(!parseUser(&current,argv[indexArgc],argv[indexArgc+1])){
             printf("The user couldn't be parsed!\n");
-            exit(-1);
+            exit(EXIT_FAILURE);
         }
     } else{
         printf("Don't have arguments for user\n");
-        exit(-1);
+        exit(EXIT_FAILURE);
     }
 
     indexArgc+=2;
@@ -145,11 +592,11 @@ int main(int argc, char *argv[]){
     if(indexArgc+1 < argc){
         if((functionHandler = functionDet(argv[indexArgc])) > 6 || functionDet(argv[indexArgc]) < 1){
             printf("The function couldn't be parsed!\n");
-            exit(-1);
+            exit(EXIT_FAILURE);
         }
     } else{
         printf("Don't have arguments for user\n");
-        exit(-1);
+        exit(EXIT_FAILURE);
     }
 
     indexArgc+=1;
@@ -157,31 +604,59 @@ int main(int argc, char *argv[]){
     //calling the function that is transmited in command line
     switch(functionHandler){
         case 1:
-            //trebuie verificat inainte role ca sa vedem daca se poate da add (vezi permisiuni)
-            if(role == false){
-                printf("Nu exista permisiune de add\n");
-                break;
-            }
-            add(&current,argv[indexArgc]);
+            add(&current,argv[indexArgc],role);
             break;
         case 2:
-            list();
+            list(argv[indexArgc]);
             break;
         case 3:
-            view();
+            if(indexArgc+1 < argc){//verify to have enough arguments
+                view(argv[indexArgc],argv[indexArgc+1]);
+            } else{
+                printf("Don't have arguments for view\n");
+                exit(EXIT_FAILURE);
+            }
+
             break;
         case 4:
-            remove_report();
+            //you have to verify before you enter the function if you have the specific role (see permissions)
+            if(role == false){
+                printf("No permission for remove_report\n");
+                break;
+            }
+            if (indexArgc + 1 < argc) {//verify to have enough arguments
+                remove_report(argv[indexArgc], argv[indexArgc+1], current.name);
+            } else {
+                printf("Don't have arguments for remove_report\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         case 5:
-            update_threshold();
+            //you have to verify before you enter the function if you have the specific role (see permissions)
+            if(role == false){
+                printf("No permission for update_threshold\n");
+                break;
+            }
+            if (indexArgc + 1 < argc) {//verify to have enough arguments
+                update_threshold(argv[indexArgc], argv[indexArgc+1], current.name);
+            } else {
+                printf("Don't have arguments for update_threshold\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         case 6:
-            filter();
+            if (indexArgc + 1 < argc) {//verify to have enough arguments
+                int num_conditions = argc - (indexArgc + 1);
+                filter(argv[indexArgc], num_conditions, &argv[indexArgc + 1]);
+            } else {
+                printf("Don't have arguments for filter\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         default:
-            printf("Nu ar trebui sa ajunga aici\n");
-            exit(-1);
+            printf("Shouldn't get here'\n");
+            exit(EXIT_FAILURE);
     }
+
     return 0;
 }
