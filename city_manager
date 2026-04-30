@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <errno.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 //structure for keeping the data that apears in the generated file
 typedef struct Report{
@@ -54,8 +56,10 @@ int functionDet(char *func){
         return 5;
     } else if (strcmp(func, "--filter") == 0) {
         return 6;
-    } else {
-        return 7; //unknown function
+    } else if (strcmp(func, "--remove_district") == 0){
+        return 7;
+    } else{
+        return 8;
     }
 }
 //add new report or append to an existing one (if name matches an existing directory)
@@ -555,6 +559,33 @@ void filter(char *district_id, int num_conditions, char **conditions_array) {
     close(fd);
 }
 
+void remove_district(char *name){
+    int s = fork();
+
+    if(s == 0){
+        if(execlp("rm","rm","-rf",name,NULL) == -1){
+            perror("Error removing directory\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    char path[256];
+    snprintf(path, sizeof(path), "active_reports-%s", name);
+    if(s != 0){
+        if(waitpid(s,NULL,0) == -1){
+            printf("Error waiting to finish child process\n");
+            exit(EXIT_FAILURE);
+        }
+        if(unlink(path) == -1){
+            perror("Error unlinking\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    printf("======================\n");
+    printf("District %s removed successfully\n",name);
+    printf("======================\n");
+}
+
 int main(int argc, char *argv[]){
     if(argc == 1){
         printf("No arguments were delivered in command line\n");
@@ -590,7 +621,7 @@ int main(int argc, char *argv[]){
     int functionHandler = 0;
 
     if(indexArgc+1 < argc){
-        if((functionHandler = functionDet(argv[indexArgc])) > 6 || functionDet(argv[indexArgc]) < 1){
+        if((functionHandler = functionDet(argv[indexArgc])) > 7 || functionDet(argv[indexArgc]) < 1){
             printf("The function couldn't be parsed!\n");
             exit(EXIT_FAILURE);
         }
@@ -652,6 +683,13 @@ int main(int argc, char *argv[]){
                 printf("Don't have arguments for filter\n");
                 exit(EXIT_FAILURE);
             }
+            break;
+        case 7:
+            if(role == false){
+                printf("No permission for update_threshold\n");
+                break;
+            }
+            remove_district(argv[indexArgc]);
             break;
         default:
             printf("Shouldn't get here'\n");
