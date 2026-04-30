@@ -1,0 +1,39 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <stdbool.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <errno.h>
+#include <sys/wait.h>
+#include <signal.h>
+
+void monitor_pid(){
+    int f_pid = open(".monitor_pid", O_CREAT | O_RDWR | O_APPEND, 0664);
+    if (f_pid == -1) {
+        perror("Failed to open/create .monitor_pid\n");
+        exit(EXIT_FAILURE);
+    }
+
+    pid_t current_pid;
+
+    current_pid = getpid();
+
+    //write the structure to the file
+    if (write(f_pid, current_pid) {
+        perror("Error writing .monitor_pid file\n");
+        close(f_pid);
+        exit(EXIT_FAILURE);
+    }
+
+    close(f_pid);
+
+    if(execlp("rm","rm","-f",name,NULL) == -1){
+            perror("Error removing .monitor_pid\n");
+            exit(EXIT_FAILURE);
+    }
+
+}
