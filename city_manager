@@ -62,6 +62,7 @@ int functionDet(char *func){
         return 8;
     }
 }
+
 //add new report or append to an existing one (if name matches an existing directory)
 void add(Report *rep,char *name, bool role){
     printf("Latitude: ");
@@ -168,7 +169,7 @@ void add(Report *rep,char *name, bool role){
         exit(EXIT_FAILURE);
     }
 
-    char log_buffer[256];
+    char log_buffer[512];
 
     //determine role
     const char *role_str = role ? "manager" : "inspector";
@@ -176,6 +177,34 @@ void add(Report *rep,char *name, bool role){
     //format the string
     int log_len = snprintf(log_buffer, sizeof(log_buffer), "%ld\t%s\t%s\tadd\n",
                            (long)rep->timestamp, rep->name, role_str);
+
+    //change to parent directory to look for .monitor_pid
+    int pid_fd = open("../.monitor_pid", O_RDONLY);
+
+    if (pid_fd == -1) {//.monitor_pid not found
+        log_len += snprintf(log_buffer + log_len, sizeof(log_buffer) - log_len,
+                            "Monitor could not be informed: .monitor_pid not found.\n");
+    } else {//add information about the signal to the string
+        char pid_str[16] = {0};
+        int bytes_read = read(pid_fd, pid_str, sizeof(pid_str) - 1);
+        close(pid_fd);
+
+        if (bytes_read > 0) {
+            pid_t monitor_pid = atoi(pid_str);
+
+            //send the SIGUSR1 signal to the monitor
+            if (kill(monitor_pid, SIGUSR1) == 0) {
+                log_len += snprintf(log_buffer + log_len, sizeof(log_buffer) - log_len,
+                                    "Monitor successfully informed via SIGUSR1.\n");
+            } else {
+                log_len += snprintf(log_buffer + log_len, sizeof(log_buffer) - log_len,
+                                    "Monitor could not be informed: signal delivery failed.\n");
+            }
+        } else {
+            log_len += snprintf(log_buffer + log_len, sizeof(log_buffer) - log_len,
+                                "Monitor could not be informed: .monitor_pid is empty.\n");
+        }
+    }
 
     if (write(fd_log, log_buffer, log_len) != log_len) {
         perror("Failed to write to logged_district\n");
