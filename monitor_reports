@@ -1,0 +1,88 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <signal.h>
+
+//safe flag to tell the main loop when to stop
+volatile sig_atomic_t keep_running = 1;
+
+//signal handler
+void handle_signal(int sig) {
+    if (sig == SIGUSR1) {
+        const char *msg = "New report added!\n";
+        write(STDOUT_FILENO, msg, strlen(msg));
+    } else if (sig == SIGINT) {
+        const char *msg = "\nMonitor shutting down...\n";
+        write(STDOUT_FILENO, msg, strlen(msg));
+        keep_running = 0; //break the infinite loop
+    }
+}
+
+int main(){
+    int f_pid = open(".monitor_pid", O_CREAT | O_RDWR | O_TRUNC, 0664);
+    if (f_pid == -1) {
+        perror("Failed to open/create .monitor_pid\n");
+        exit(EXIT_FAILURE);
+    }
+
+    pid_t current_pid = getpid();
+    char pid_str[16];
+
+    //check if pid was written inside the string
+    int len = snprintf(pid_str, sizeof(pid_str), "%d", current_pid);
+    if(len < 0){
+        printf("Error writing pid in string\n");
+        close(f_pid);
+        exit(EXIT_FAILURE);
+    }
+
+    //write pid to the file
+    if (write(f_pid, pid_str, len) != len) {
+        perror("Error writing .monitor_pid file\n");
+        close(f_pid);
+        exit(EXIT_FAILURE);
+    }
+
+    close(f_pid);
+
+    struct sigaction sa;
+    sa.sa_handler = handle_signal;//function to execute when signal arrives
+    //blocking no signals during execution
+    if(sigemptyset(&sa.sa_mask) == -1){
+        perror("Error emptying sigaction mask\n");
+        exit(EXIT_FAILURE);
+    }
+    sa.sa_flags = 0;
+
+    //register SIGUSR1 (New report notification)
+    if (sigaction(SIGUSR1, &sa, NULL) == -1) {
+        perror("Error setting up SIGUSR1 handler");
+        exit(EXIT_FAILURE);
+    }
+
+    //register SIGINT (Ctrl+C / Termination)
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        perror("Error setting up SIGINT handler");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Monitor started (PID: %d). Waiting for signals...\n", current_pid);
+
+    //putting process to sleep until any signal arrives
+    while (keep_running) {
+        pause();
+    }
+
+    //deleting file
+    if(unlink(".monitor_pid") == -1){
+        perror("Error deleting .monitor_pid\n");
+        exit(EXIT_FAILURE);
+    } else {
+        printf("======================\n");
+        printf(".monitor_pid removed.\n");
+        printf("======================\n");
+    }
+}
