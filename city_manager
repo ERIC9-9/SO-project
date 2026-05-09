@@ -488,11 +488,28 @@ void update_threshold(char *district_id, char *new_value_str, char *user_name) {
 
 //Splits a field:operator:value string into its three parts
 int parse_condition(const char *input, char *field, char *op, char *value) {
+    //find the first colon
+    const char *colon1 = strchr(input, ':');
+    if (!colon1) return 0; //missing first colon
 
-    if (sscanf(input, "%[^:]:%[^:]:%s", field, op, value) == 3) {
-        return 1; //Successfully parsed all 3 parts
-    }
-    return 0; //Failed to parse
+    //find the second colon, starting just after the first one
+    const char *colon2 = strchr(colon1 + 1, ':');
+    if (!colon2) return 0; //missing second colon
+
+    //calculate how long the first two parts are
+    size_t field_len = colon1 - input;
+    size_t op_len = colon2 - (colon1 + 1);
+
+    //copy the data into the destination arrays
+    strncpy(field, input, field_len);
+    field[field_len] = '\0';
+
+    strncpy(op, colon1 + 1, op_len);
+    op[op_len] = '\0';
+
+    strcpy(value, colon2 + 1);
+
+    return 1;
 }
 
 //Returns 1 if the record satisfies the condition, 0 otherwise
@@ -554,10 +571,19 @@ void filter(char *district_id, int num_conditions, char **conditions_array) {
 
     //read through the file record by record
     while (read(fd, &rep, sizeof(Report)) == sizeof(Report)) {
+
+        // ADD THIS LINE:
+        printf("DEBUG REPORT RAW DATA -> ID: %d | Severity: %d | Category: %s\n",
+               rep.reportID, rep.severity, rep.category);
+
         int passes_all = 1; //assume the report is valid until a condition fails it
 
         //test the current report against EVERY condition
         for (int i = 0; i < num_conditions; i++) {
+
+            // ADD THIS DEBUG LINE:
+            printf("DEBUG: Attempting to parse condition [%d]: '%s'\n", i, conditions_array[i]);
+
             if (parse_condition(conditions_array[i], field, op, value)) {
 
                 //if the report fails even ONE condition, flag it and break the inner loop
@@ -623,6 +649,8 @@ int main(int argc, char *argv[]){
 
     int indexArgc = 1;
     Report current;
+    memset(&current, 0, sizeof(Report));
+
     bool role;//1 - manager, 0 - inspector
     if(indexArgc+1 < argc){
         if(!parseRole(&role,argv[indexArgc],argv[indexArgc+1])){
